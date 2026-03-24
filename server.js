@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const https = require('https');
 
 const app = express();
 app.use(express.json());
@@ -8,26 +9,94 @@ app.use(express.json());
 // CONFIG
 // =============================
 const MAX_SUBJECT_RETRIES = 3;
-const PROCESS_INTERVAL_MS = 6000; // 10 contacts per minute
+const PROCESS_INTERVAL_MS = 500;
+const CONCURRENCY = 10;
+const SCRAPE_TIMEOUT_MS = 4000;
+const MAX_CONTENT_BYTES = 300_000;
+const DOMAIN_CACHE_TTL_MS = 60 * 60 * 1000;
 
 const HUBSPOT_TOKEN = process.env.HUBSPOT_TOKEN;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // =============================
-// SIMPLE QUEUE
+// BLOCKED DOMAINS
+// =============================
+const BLOCKED_DOMAINS = new Set([
+  'salesforce.com', 'microsoft.com', 'google.com', 'apple.com',
+  'amazon.com', 'linkedin.com', 'facebook.com', 'twitter.com',
+  'instagram.com', 'youtube.com', 'wikipedia.org',
+  'bankofamerica.com', 'chase.com', 'wellsfargo.com', 'citibank.com',
+  'jpmorgan.com', 'goldmansachs.com', 'morganstanley.com',
+  'bloomberg.com', 'reuters.com', 'wsj.com', 'nytimes.com',
+  'oracle.com', 'sap.com', 'ibm.com', 'cisco.com', 'adobe.com',
+  'workday.com', 'servicenow.com', 'zendesk.com', 'slack.com',
+]);
+
+// =============================
+// DOMAIN SCRAPE CACHE
+// =============================
+const domainCache = new Map();
+
+function getCachedScrape(domain) {
+  const entry = domainCache.get(domain);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > DOMAIN_CACHE_TTL_MS) {
+    domainCache.delete(domain);
+    return null;
+  }
+  return entry.content;
+}
+
+function setCachedScrape(domain, content) {
+  domainCache.set(domain, { content, timestamp: Date.now() });
+}
+
+// =============================
+// QUEUE & IN-FLIGHT TRACKING
 // =============================
 let queue = [];
-let processing = false;
+let inFlight = 0;
 
 // =============================
 // HEALTH CHECK
 // =============================
 app.get("/", (req, res) => {
-  res.json({ 
+  res.json({
     status: "ok",
     queueLength: queue.length,
-    processing: processing
+    inFlight,
+    openSlots: Math.max(0, CONCURRENCY - inFlight)
   });
+});
+
+// =============================
+// DASHBOARD
+// =============================
+app.get("/dashboard", (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>General TPG Nurture - Dashboard</title>
+  <meta http-equiv="refresh" content="5">
+  <style>
+    body { font-family: Arial, sans-serif; background: #1a1a1a; color: #f0f0f0; padding: 40px; }
+    h1 { color: #a2cf23; }
+    .stat { display: inline-block; background: #2a2a2a; border: 1px solid #a2cf23;
+            border-radius: 8px; padding: 20px 32px; margin: 12px; text-align: center; }
+    .stat-value { font-size: 2.4em; font-weight: bold; color: #a2cf23; }
+    .stat-label { font-size: 0.85em; color: #aaa; margin-top: 4px; }
+    .footer { margin-top: 32px; color: #555; font-size: 0.8em; }
+  </style>
+</head>
+<body>
+  <h1>General TPG Nurture</h1>
+  <div class="stat"><div class="stat-value">${queue.length}</div><div class="stat-label">Queue Depth</div></div>
+  <div class="stat"><div class="stat-value">${inFlight}</div><div class="stat-label">In Flight</div></div>
+  <div class="stat"><div class="stat-value">${Math.max(0, CONCURRENCY - inFlight)}</div><div class="stat-label">Open Slots</div></div>
+  <div class="stat"><div class="stat-value">${CONCURRENCY}</div><div class="stat-label">Concurrency</div></div>
+  <div class="footer">Auto-refreshes every 5 seconds - ${new Date().toLocaleString()}</div>
+</body>
+</html>`);
 });
 
 // =============================
@@ -35,40 +104,42 @@ app.get("/", (req, res) => {
 // =============================
 app.post("/enqueue", (req, res) => {
   queue.push({ ...req.body, retries: 0 });
-  res.status(200).json({ 
+  res.status(200).json({
     status: "queued",
     queuePosition: queue.length
   });
 });
 
 // =============================
-// WORKER LOOP
+// WORKER LOOP (concurrent fire-and-forget)
 // =============================
-setInterval(async () => {
-  if (processing || queue.length === 0) return;
+setInterval(() => {
+  while (inFlight < CONCURRENCY && queue.length > 0) {
+    const job = queue.shift();
+    processJob(job);
+  }
+}, PROCESS_INTERVAL_MS);
 
-  processing = true;
-  const job = queue.shift();
-
+async function processJob(job) {
+  inFlight++;
   try {
     await updateStatus(job.contactId, "IN_PROGRESS");
 
-    const result = await runClaude(job);
+    const scrapedContent = await scrapeWebsite(job.website);
+    const result = await runClaude(job, scrapedContent);
 
     await writeResults(job.contactId, result, job.sequenceStep || 1);
-
     await updateStatus(job.contactId, "SENT");
-    
-    console.log(`✅ Completed: ${job.contactId} - Step ${job.sequenceStep}`);
+
+    console.log(`Completed: ${job.contactId} - Step ${job.sequenceStep}`);
   } catch (err) {
-    console.error(`❌ Error for ${job.contactId}:`, err.message);
-    
+    console.error(`Error for ${job.contactId}:`, err.message);
+
     if (err.response?.status === 429) {
-      console.log(`⏳ Rate limited, requeuing ${job.contactId}`);
+      console.log(`Rate limited, requeuing ${job.contactId}`);
       queue.push(job);
     } else {
-      job.retries++;
-
+      job.retries = (job.retries || 0) + 1;
       if (job.retries <= 2) {
         await updateStatus(job.contactId, "RETRY_PENDING");
         queue.push(job);
@@ -77,17 +148,97 @@ setInterval(async () => {
       }
     }
   } finally {
-    processing = false;
+    inFlight--;
   }
-}, PROCESS_INTERVAL_MS);
+}
+
+// =============================
+// WEBSITE SCRAPER
+// =============================
+async function scrapeWebsite(rawUrl) {
+  if (!rawUrl) return "";
+
+  let url = rawUrl.trim();
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+
+  let domain = "";
+  try {
+    domain = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+
+  if (BLOCKED_DOMAINS.has(domain)) return "";
+
+  const cached = getCachedScrape(domain);
+  if (cached) return cached;
+
+  const agent = new https.Agent({ secureOptions: 0x4, rejectUnauthorized: false });
+  const axiosOpts = {
+    timeout: SCRAPE_TIMEOUT_MS,
+    maxContentLength: MAX_CONTENT_BYTES,
+    httpsAgent: agent,
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; TPGBot/1.0)" }
+  };
+
+  const pathsToTry = [
+    "",
+    "/about",
+    "/about-us",
+    "/news",
+    "/newsroom",
+    "/blog",
+    "/insights",
+    "/press",
+    "/press-releases",
+  ];
+
+  let combined = "";
+
+  for (const path of pathsToTry) {
+    try {
+      const resp = await axios.get(url + path, axiosOpts);
+      const text = (resp.data || "")
+        .toString()
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim()
+        .slice(0, 3000);
+      if (text.length > 100) combined += "\n\n[" + (path || "/") + "]\n" + text;
+    } catch {
+      // silently skip unavailable paths
+    }
+    if (combined.length > 8000) break;
+  }
+
+  const result = combined.trim().slice(0, 8000);
+  if (result) setCachedScrape(domain, result);
+  return result;
+}
+
+// =============================
+// SEQUENCE ARC
+// =============================
+const SEQUENCE_ARC = {
+  1:  { purpose: "Pattern interrupt. Open with a hyper-specific observation from their website or industry that reframes a problem they likely already feel. Goal: earn a second read.", ctaStyle: "calendar" },
+  2:  { purpose: "Credibility builder. Lead with a brief, concrete TPG client outcome relevant to their industry or role. No fluff. Let the result do the persuading.", ctaStyle: "calendar" },
+  3:  { purpose: "Social proof. Reference how peers in their industry are using HubSpot and TPG to solve a specific operational problem. Make them feel the movement.", ctaStyle: "resource" },
+  4:  { purpose: "Problem deepener. Name a hidden cost or downstream consequence of the problem from a new angle. Do not pitch yet. Just make the pain more real.", ctaStyle: "question" },
+  5:  { purpose: "Insight and POV. Share a sharp, non-obvious opinion Jeff holds about revenue marketing in their space. Position Jeff as a practitioner, not a vendor.", ctaStyle: "calendar" },
+  6:  { purpose: "Objection handling. Address a likely reason they have not replied (too busy, already have a solution, unclear ROI). Be direct and empathetic, not defensive.", ctaStyle: "resource" },
+  7:  { purpose: "Urgency without pressure. Reference a real market shift, hiring signal, or technology trend that makes inaction more costly. Ground it in their specific context.", ctaStyle: "calendar" },
+  8:  { purpose: "Case study hook. Open with a one-sentence client story (no name needed) that mirrors their situation. Let the parallel do the work.", ctaStyle: "calendar" },
+  9:  { purpose: "Soft check-in. Acknowledge the sequence, be self-aware and human. Ask a genuine yes/no question about whether this is still relevant for them right now.", ctaStyle: "question" },
+  10: { purpose: "Breakup email. Brief, gracious, no hard sell. Leave the door open. Make it the kind of email they would forward to a colleague.", ctaStyle: "calendar" },
+};
 
 // =============================
 // CLAUDE LOGIC
 // =============================
-async function runClaude(job) {
-  const SEQUENCE_STEP = job.sequenceStep || 1; // Get from job data
-  
-  const safe = v => (v ?? "").toString().trim();
+async function runClaude(job, scrapedContent = "") {
+  const SEQUENCE_STEP = job.sequenceStep || 1;
 
   const {
     firstname = '',
@@ -108,102 +259,115 @@ async function runClaude(job) {
       ? "Buyer intent signals are active for this account."
       : "Buyer intent signals are not active or unavailable.";
 
-  // THIS IS THE KEY PART - it reads ALL prior emails
-  let priorEmailsText = [];
+  const priorEmailsText = [];
   for (let i = 1; i < SEQUENCE_STEP; i++) {
-    const field = job[`claude_ai_generated_email_text_${i}`];
-    if (field) priorEmailsText.push(`EMAIL ${i}:\n${field}`);
+    const field = job["claude_ai_generated_email_text_" + i];
+    if (field) priorEmailsText.push("EMAIL " + i + ":\n" + field);
   }
-
   const priorEmailsBlock = priorEmailsText.length
     ? priorEmailsText.join("\n\n---\n\n")
     : "N/A";
 
-  // ... rest of your Claude prompt stays the same
-  
-  const userContent = `You are Jeff Pedowitz at The Pedowitz Group writing EMAIL ${SEQUENCE_STEP} in a long-form personalized outbound nurture (10 total touches).
+  const researchBlock = scrapedContent
+    ? "LIVE WEBSITE RESEARCH (scraped):\n" + scrapedContent
+    : "LIVE WEBSITE RESEARCH: Not available.";
 
-PROSPECT DATA:
-- Name: ${firstname}
-- Title: ${jobtitle}
-- Company: ${company}
-- Industry: ${industry}
-- Employee Count: ${numemployees}
-- Annual Revenue: ${annualrevenue}
-- LinkedIn: ${hs_linkedin_url}
-- Website: ${website}
-- Intent Signals: ${IntentContext}
-- Web Technologies: ${web_technologies || "Not listed"}
-- Company Description: ${description || "Not provided"}
+  const arc = SEQUENCE_ARC[SEQUENCE_STEP] || SEQUENCE_ARC[1];
 
-PRIOR EMAILS — BACKGROUND CONTEXT ONLY:
-Everything below has ALREADY been sent to this contact.
-${priorEmailsBlock}
+  const ctaInstruction = arc.ctaStyle === "question"
+    ? "End with a single direct yes/no question instead of a calendar link. No scheduling link in this email."
+    : arc.ctaStyle === "resource"
+    ? "Include ONE paragraph with exactly ONE single-word hyperlink to a resource URL (choose randomly from the list below). Do NOT include a calendar link in this email."
+    : "Include ONE separate paragraph with a calendar CTA using: <a href=\"https://meetings.hubspot.com/jeff-pedowitz\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">word</a>";
 
-ABSOLUTE NON-REPETITION RULES (HARD FAIL CONDITIONS):
-- You MUST NOT repeat any idea, insight, pain point, example, framing, or analogy used in ANY prior email.
-- You MUST NOT reuse sentence structure, paragraph structure, or opening style from prior emails.
-- You MUST introduce a NEW perspective that advances the conversation.
-- If similarity to ANY prior email exceeds a minimal level, the response is INVALID.
+  const userContent =
+    "You are Jeff Pedowitz, founder of The Pedowitz Group, writing EMAIL " + SEQUENCE_STEP + " of 10 in a personalized outbound nurture sequence.\n\n" +
 
-SUBJECT LINE NON-REPETITION REQUIREMENTS (HARD RULE):
-- The subject line MUST be entirely unique and clearly distinct from all prior subject lines.
-- You MUST NOT reuse, closely paraphrase, or slightly modify previous subject lines.
-- If the subject line is semantically or structurally similar to any prior subject, the response is INVALID.
+    "PROSPECT DATA:\n" +
+    "- Name: " + firstname + "\n" +
+    "- Title: " + jobtitle + "\n" +
+    "- Company: " + company + "\n" +
+    "- Industry: " + industry + "\n" +
+    "- Employee Count: " + numemployees + "\n" +
+    "- Annual Revenue: " + annualrevenue + "\n" +
+    "- LinkedIn: " + hs_linkedin_url + "\n" +
+    "- Website: " + website + "\n" +
+    "- Intent Signals: " + IntentContext + "\n" +
+    "- Web Technologies: " + (web_technologies || "Not listed") + "\n" +
+    "- Company Description: " + (description || "Not provided") + "\n\n" +
 
-WRITE EMAIL ${SEQUENCE_STEP} WITH THESE REQUIREMENTS:
+    researchBlock + "\n\n" +
 
-WRITE:
-- Subject: ≤ 8 words and DIFFERENT from all prior subjects.
-- Start with a salutation on its own line:
-  "${firstname},"
-- One blank line after salutation.
-- Opening line MUST use a NEW rhetorical device not previously used.
-- Body length: 120–160 words.
-- Each paragraph separated by ONE blank line.
-- No bullets. No signature.
-- Return HTML-safe text.
-- Use <a> tags only for links. No other HTML.
+    "PRIOR EMAILS (ALREADY SENT - do not repeat anything from these):\n" +
+    priorEmailsBlock + "\n\n" +
 
-MESSAGING STRATEGY:
-- Do NOT assume HubSpot usage.
-- Reference HubSpot as a platform companies in their industry leverage.
-- Position The Pedowitz Group as HubSpot Elite Partners and revenue marketing experts.
-- Choose a PROBLEM DOMAIN NOT USED PREVIOUSLY
-  (examples: forecasting accuracy, RevOps governance, attribution trust, data hygiene, lifecycle alignment, scale readiness).
+    "THIS EMAIL'S PURPOSE (Email " + SEQUENCE_STEP + " of 10):\n" +
+    arc.purpose + "\n" +
+    "The sequence arc is: awareness > credibility > social proof > deepen pain > POV > objection handling > urgency > case study > soft check-in > breakup. You are at step " + SEQUENCE_STEP + ". Write accordingly. Do not jump ahead or repeat a prior arc theme.\n\n" +
 
-PERSONALIZATION & 1:1 OUTREACH REQUIREMENTS (MANDATORY):
-- The email MUST read like a true 1:1 sales outreach, not a marketing broadcast.
-- Incorporate at least ONE specific, concrete reference to the prospect or their company using the research data provided.
-- If recent news exists in research:
-  - Acknowledge it naturally in 1–2 sentences.
-- If no clear news:
-  - Use role-specific and company-contextual personalization based on research findings.
-- Personalization should feel earned, subtle, and woven into the narrative — not bolted on as a separate paragraph.
-- Emails that feel templated, generic, or broadly applicable to multiple companies are INVALID.
+    "NON-REPETITION RULES (HARD FAIL):\n" +
+    "- Do NOT repeat any idea, insight, pain point, framing, or analogy from ANY prior email.\n" +
+    "- Do NOT reuse sentence structure, paragraph structure, or opening style from prior emails.\n" +
+    "- Do NOT use a rhetorical question as your opening line.\n" +
+    "- Subject line must be entirely unique. No reuse, close paraphrase, or structural similarity to prior subjects.\n\n" +
 
-LINKED CONTENT REQUIREMENTS:
-- Include ONE paragraph with exactly ONE single-word hyperlink using this format:
-  <a href="URL" style="font-weight:bold;text-decoration:underline;color:#A2CF23;">word</a>
-- Randomly choose ONE:
-  * https://www.pedowitzgroup.com/hubspot-main
-  * https://www.pedowitzgroup.com/hubspot-move-it
-  * https://www.pedowitzgroup.com/hubspot-tune-it
-  * https://www.pedowitzgroup.com/hubspot-run-it
-  * https://www.pedowitzgroup.com/solutions/martech/hubSpot
-- Include ONE separate paragraph with a calendar CTA using:
-  <a href="https://meetings.hubspot.com/jeff-pedowitz" style="font-weight:bold;text-decoration:underline;color:#A2CF23;">word</a>
+    "BANNED PHRASES (using any of these = INVALID response):\n" +
+    "Do not use any of the following or close variants:\n" +
+    "\"I wanted to reach out\", \"I hope this finds you well\", \"I hope you're doing well\",\n" +
+    "\"touching base\", \"just checking in\", \"circling back\", \"following up\",\n" +
+    "\"in today's landscape\", \"in today's competitive landscape\", \"in today's fast-paced\",\n" +
+    "\"it's no secret that\", \"as you know\", \"I'm sure you're aware\",\n" +
+    "\"navigating [anything]\", \"the ever-changing\", \"rapidly evolving\",\n" +
+    "\"synergy\", \"leverage\" (as a verb), \"utilize\", \"holistic\", \"robust\",\n" +
+    "\"game-changer\", \"game changer\", \"move the needle\", \"at the end of the day\",\n" +
+    "\"take it to the next level\", \"best-in-class\", \"cutting-edge\", \"world-class\",\n" +
+    "\"I'd love to connect\", \"would love to chat\", \"hoping we can connect\",\n" +
+    "\"don't hesitate to reach out\", \"feel free to reach out\",\n" +
+    "\"looking forward to hearing from you\", \"let me know if you have any questions\"\n\n" +
 
-COMPLIANCE:
-- No dollar amounts unless public.
-- No fabricated company news.
-- Speak to industry patterns when specifics are unknown.
+    "WRITING RULES:\n" +
+    "- Subject: 8 words or fewer. Plaintext. No punctuation gimmicks.\n" +
+    "- Salutation on its own line: \"" + firstname + ",\"\n" +
+    "- One blank line after salutation.\n" +
+    "- Body: 75-110 words. Tight. Every sentence earns its place.\n" +
+    "- Each paragraph separated by ONE blank line.\n" +
+    "- No bullets. No signature block.\n" +
+    "- HTML-safe text. Use <a> tags only for links. No other HTML.\n" +
+    "- Write like a confident practitioner, not a vendor. Declarative sentences over questions.\n" +
+    "- No em dashes (the long dash character). Use a comma or period instead.\n\n" +
 
-OUTPUT FORMAT (exactly):
-Subject: <subject>
+    "PERSONALIZATION (MANDATORY):\n" +
+    "- If scraped website content is available above, your OPENING LINE must reference a specific, concrete detail from it (a product, initiative, market, recent announcement, or stated priority). Do not open generically.\n" +
+    "- If no scraped content is available, open with a role-specific and company-contextual observation grounded in the prospect data.\n" +
+    "- Personalization must be woven into the narrative, not dropped in as a standalone sentence.\n" +
+    "- Generic emails applicable to any company are INVALID.\n\n" +
 
-Body:
-<body>`;
+    "MESSAGING STRATEGY:\n" +
+    "- Do NOT assume HubSpot usage.\n" +
+    "- Reference HubSpot as a platform companies in their industry are using.\n" +
+    "- Position The Pedowitz Group as HubSpot Elite Partners and revenue marketing experts.\n" +
+    "- Choose ONE problem domain not used in any prior email:\n" +
+    "  (forecasting accuracy, RevOps governance, attribution trust, data hygiene, lifecycle stage alignment, scale readiness, pipeline velocity, sales-marketing handoff, lead quality, customer retention marketing)\n\n" +
+
+    "LINKS AND CTA:\n" +
+    "- Resource URLs (choose ONE randomly when needed):\n" +
+    "  * https://www.pedowitzgroup.com/hubspot-main\n" +
+    "  * https://www.pedowitzgroup.com/hubspot-move-it\n" +
+    "  * https://www.pedowitzgroup.com/hubspot-tune-it\n" +
+    "  * https://www.pedowitzgroup.com/hubspot-run-it\n" +
+    "  * https://www.pedowitzgroup.com/solutions/martech/hubSpot\n" +
+    "- Single-word hyperlink format: <a href=\"URL\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">word</a>\n" +
+    "- CTA instruction for this email: " + ctaInstruction + "\n\n" +
+
+    "COMPLIANCE:\n" +
+    "- No dollar amounts unless publicly stated.\n" +
+    "- No fabricated company news or quotes.\n" +
+    "- Speak to industry patterns when specifics are unknown.\n\n" +
+
+    "OUTPUT FORMAT (exactly):\n" +
+    "Subject: <subject>\n\n" +
+    "Body:\n" +
+    "<body>";
 
   let subject = "";
   let bodyText = "";
@@ -218,7 +382,7 @@ Body:
         model: "claude-sonnet-4-20250514",
         max_tokens: 1500,
         temperature: 0.7,
-        system: 'You write long-sequence B2B nurture emails with strict non-repetition and genuine 1:1 personalization.',
+        system: "You write long-sequence B2B nurture emails with strict non-repetition, a defined narrative arc, and genuine 1:1 personalization. You never use banned phrases, em dashes, or rhetorical openers. You write like a confident practitioner.",
         messages: [{ role: "user", content: userContent }]
       },
       {
@@ -231,8 +395,7 @@ Body:
       }
     );
 
-    const text =
-      res.data?.content?.find(p => p.type === "text")?.text || "";
+    const text = res.data?.content?.find(p => p.type === "text")?.text || "";
 
     const subjectMatch = text.match(/^\s*Subject:\s*(.+)\s*$/mi);
     const bodyMatch =
@@ -247,7 +410,26 @@ Body:
     throw new Error("Missing subject after retries");
   }
 
+  subject = sanitizeEmDashes(subject);
+  bodyText = sanitizeEmDashes(bodyText);
+
   return { subject, bodyText };
+}
+
+// =============================
+// EM DASH SANITIZATION
+// =============================
+function sanitizeEmDashes(text) {
+  if (!text) return text;
+  return text
+    .replace(/\u2014/g, ', ')
+    .replace(/\u2013/g, ' to ')
+    .replace(/&mdash;/g, ', ')
+    .replace(/&ndash;/g, ' to ')
+    .replace(/&#8212;/g, ', ')
+    .replace(/&#8211;/g, ' to ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
 }
 
 // =============================
@@ -257,45 +439,46 @@ async function writeResults(contactId, { subject, bodyText }, sequenceStep = 1) 
   const bodyHtml = bodyText
     .replace(/\r\n/g, "\n")
     .split(/\n{2,}/)
-    .map(p => `<p style="margin:0 0 16px;">${p.replace(/\n/g, "<br>")}</p>`)
+    .map(p => "<p style=\"margin:0 0 16px;\">" + p.replace(/\n/g, "<br>") + "</p>")
     .join("\n");
 
   await axios.patch(
-    `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+    "https://api.hubapi.com/crm/v3/objects/contacts/" + contactId,
     {
       properties: {
-        [`prospect_email_${sequenceStep}_subject_line`]: subject,
-        [`prospect_email_${sequenceStep}`]: bodyHtml,
-        [`claude_ai_generated_email_text_${sequenceStep}`]: bodyText
+        ["prospect_email_" + sequenceStep + "_subject_line"]: subject,
+        ["prospect_email_" + sequenceStep]: bodyHtml,
+        ["claude_ai_generated_email_text_" + sequenceStep]: bodyText
       }
     },
     {
       headers: {
-        Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+        Authorization: "Bearer " + HUBSPOT_TOKEN,
         "Content-Type": "application/json"
       },
       timeout: 10000
     }
   );
 }
+
 // =============================
 // STATUS UPDATE
 // =============================
 async function updateStatus(contactId, status) {
   try {
     await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+      "https://api.hubapi.com/crm/v3/objects/contacts/" + contactId,
       { properties: { ai_email_step_status: status } },
       {
         headers: {
-          Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+          Authorization: "Bearer " + HUBSPOT_TOKEN,
           "Content-Type": "application/json"
         },
         timeout: 5000
       }
     );
   } catch (err) {
-    console.error(`Status update failed for ${contactId}:`, err.message);
+    console.error("Status update failed for " + contactId + ":", err.message);
   }
 }
 
@@ -304,6 +487,6 @@ async function updateStatus(contactId, status) {
 // =============================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Render worker running on port ${PORT}`);
-  console.log(`📊 Processing: ${Math.floor(60000 / PROCESS_INTERVAL_MS)} contacts per minute`);
+  console.log("General TPG Nurture running on port " + PORT);
+  console.log("Concurrency: " + CONCURRENCY + " | Tick: " + PROCESS_INTERVAL_MS + "ms");
 });
