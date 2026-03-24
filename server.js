@@ -73,30 +73,49 @@ app.get("/", (req, res) => {
 // DASHBOARD
 // =============================
 app.get("/dashboard", (req, res) => {
-  res.send(`<!DOCTYPE html>
-<html>
-<head>
-  <title>HubSpot Focused Nurture - Dashboard</title>
-  <meta http-equiv="refresh" content="5">
-  <style>
-    body { font-family: Arial, sans-serif; background: #1a1a1a; color: #f0f0f0; padding: 40px; }
-    h1 { color: #a2cf23; }
-    .stat { display: inline-block; background: #2a2a2a; border: 1px solid #a2cf23;
-            border-radius: 8px; padding: 20px 32px; margin: 12px; text-align: center; }
-    .stat-value { font-size: 2.4em; font-weight: bold; color: #a2cf23; }
-    .stat-label { font-size: 0.85em; color: #aaa; margin-top: 4px; }
-    .footer { margin-top: 32px; color: #555; font-size: 0.8em; }
-  </style>
-</head>
-<body>
-  <h1>HubSpot Focused Nurture</h1>
-  <div class="stat"><div class="stat-value">${queue.length}</div><div class="stat-label">Queue Depth</div></div>
-  <div class="stat"><div class="stat-value">${inFlight}</div><div class="stat-label">In Flight</div></div>
-  <div class="stat"><div class="stat-value">${Math.max(0, CONCURRENCY - inFlight)}</div><div class="stat-label">Open Slots</div></div>
-  <div class="stat"><div class="stat-value">${CONCURRENCY}</div><div class="stat-label">Concurrency</div></div>
-  <div class="footer">Auto-refreshes every 5 seconds - ${new Date().toLocaleString()}</div>
-</body>
-</html>`);
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>HubSpot Focused Nurture — Queue Monitor</title>
+      <meta http-equiv="refresh" content="5">
+      <style>
+        body { font-family: monospace; background: #0f0f0f; color: #a2cf23; padding: 40px; }
+        h1 { font-size: 18px; margin-bottom: 30px; color: #fff; }
+        .grid { display: flex; gap: 60px; margin-bottom: 40px; }
+        .block {}
+        .stat { font-size: 64px; font-weight: bold; margin: 0; line-height: 1; }
+        .label { font-size: 13px; color: #555; margin-top: 8px; }
+        .green { color: #a2cf23; }
+        .orange { color: #f0a500; }
+        .grey { color: #333; }
+        .footer { font-size: 12px; color: #333; margin-top: 40px; border-top: 1px solid #1a1a1a; padding-top: 20px; }
+      </style>
+    </head>
+    <body>
+      <h1>HubSpot Focused Nurture &mdash; Queue Monitor</h1>
+
+      <div class="grid">
+        <div class="block">
+          <div class="stat ${queue.length > 0 ? "orange" : "grey"}">${queue.length}</div>
+          <div class="label">contacts waiting in queue</div>
+        </div>
+        <div class="block">
+          <div class="stat green">${inFlight}</div>
+          <div class="label">in-flight (of ${CONCURRENCY} max slots)</div>
+        </div>
+        <div class="block">
+          <div class="stat green">${CONCURRENCY - inFlight}</div>
+          <div class="label">open slots available</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        Last refreshed: ${new Date().toLocaleTimeString()} &nbsp;&middot;&nbsp; Auto-refreshes every 5 seconds
+      </div>
+    </body>
+    </html>
+  `);
 });
 
 // =============================
@@ -350,13 +369,17 @@ async function runClaude(job, scrapedContent = "") {
     "  (forecasting accuracy, RevOps governance, attribution trust, data hygiene, lifecycle stage alignment, scale readiness, pipeline velocity, sales-marketing handoff, lead quality, customer retention marketing)\n\n" +
 
     "LINKS AND CTA:\n" +
-    "- Resource URLs (choose ONE randomly when needed):\n" +
+    "- EVERY email MUST include exactly ONE hyperlinked word linking to a TPG resource URL. This is required in every email regardless of CTA style.\n" +
+    "- The hyperlink must be embedded naturally in a sentence that flows with the surrounding content. It should read like a reference or supporting detail, not a call-to-action. The reader should barely notice it is a link until they see the styling.\n" +
+    "- Choose ONE URL randomly from this list:\n" +
     "  * https://www.pedowitzgroup.com/hubspot-main\n" +
     "  * https://www.pedowitzgroup.com/hubspot-move-it\n" +
     "  * https://www.pedowitzgroup.com/hubspot-tune-it\n" +
     "  * https://www.pedowitzgroup.com/hubspot-run-it\n" +
     "  * https://www.pedowitzgroup.com/solutions/martech/hubSpot\n" +
-    "- Single-word hyperlink format: <a href=\"URL\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">word</a>\n" +
+    "- Hyperlink format (single word only): <a href=\"URL\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">word</a>\n" +
+    "- Good example: 'The companies getting the most from HubSpot treat it as a revenue <a href=\"https://www.pedowitzgroup.com/hubspot-main\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">infrastructure</a> problem, not a marketing one.'\n" +
+    "- Bad example: 'Click <a href=\"...\">here</a> to learn more.' — generic, feels like an ad, INVALID.\n" +
     "- CTA instruction for this email: " + ctaInstruction + "\n\n" +
 
     "COMPLIANCE:\n" +
