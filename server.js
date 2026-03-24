@@ -76,7 +76,7 @@ app.get("/dashboard", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
 <head>
-  <title>General TPG Nurture - Dashboard</title>
+  <title>HubSpot Focused Nurture - Dashboard</title>
   <meta http-equiv="refresh" content="5">
   <style>
     body { font-family: Arial, sans-serif; background: #1a1a1a; color: #f0f0f0; padding: 40px; }
@@ -89,7 +89,7 @@ app.get("/dashboard", (req, res) => {
   </style>
 </head>
 <body>
-  <h1>General TPG Nurture</h1>
+  <h1>HubSpot Focused Nurture</h1>
   <div class="stat"><div class="stat-value">${queue.length}</div><div class="stat-label">Queue Depth</div></div>
   <div class="stat"><div class="stat-value">${inFlight}</div><div class="stat-label">In Flight</div></div>
   <div class="stat"><div class="stat-value">${Math.max(0, CONCURRENCY - inFlight)}</div><div class="stat-label">Open Slots</div></div>
