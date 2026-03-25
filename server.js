@@ -52,10 +52,11 @@ function setCachedScrape(domain, content) {
 }
 
 // =============================
-// QUEUE & IN-FLIGHT TRACKING
+// QUEUE, IN-FLIGHT & ERROR TRACKING
 // =============================
 let queue = [];
 let inFlight = 0;
+let errorCount = 0;  // ← NEW: increments on permanent failure, resets on restart
 
 // =============================
 // HEALTH CHECK
@@ -65,7 +66,8 @@ app.get("/", (req, res) => {
     status: "ok",
     queueLength: queue.length,
     inFlight,
-    openSlots: Math.max(0, CONCURRENCY - inFlight)
+    openSlots: Math.max(0, CONCURRENCY - inFlight),
+    errorCount
   });
 });
 
@@ -88,6 +90,7 @@ app.get("/dashboard", (req, res) => {
         .label { font-size: 13px; color: #555; margin-top: 8px; }
         .green { color: #a2cf23; }
         .orange { color: #f0a500; }
+        .red { color: #e05252; }
         .grey { color: #333; }
         .footer { font-size: 12px; color: #333; margin-top: 40px; border-top: 1px solid #1a1a1a; padding-top: 20px; }
       </style>
@@ -107,6 +110,10 @@ app.get("/dashboard", (req, res) => {
         <div class="block">
           <div class="stat green">${CONCURRENCY - inFlight}</div>
           <div class="label">open slots available</div>
+        </div>
+        <div class="block">
+          <div class="stat ${errorCount > 0 ? "red" : "grey"}">${errorCount}</div>
+          <div class="label">processing errors (since last restart)</div>
         </div>
       </div>
 
@@ -163,6 +170,7 @@ async function processJob(job) {
         await updateStatus(job.contactId, "RETRY_PENDING");
         queue.push(job);
       } else {
+        errorCount++;  // ← NEW: only counts permanent failures, not retries or 429s
         await updateStatus(job.contactId, "FAILED");
       }
     }
