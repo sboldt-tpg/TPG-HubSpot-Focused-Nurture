@@ -56,7 +56,7 @@ function setCachedScrape(domain, content) {
 // =============================
 let queue = [];
 let inFlight = 0;
-let errorCount = 0;  // ← NEW: increments on permanent failure, resets on restart
+let errorCount = 0;
 
 // =============================
 // HEALTH CHECK
@@ -170,7 +170,7 @@ async function processJob(job) {
         await updateStatus(job.contactId, "RETRY_PENDING");
         queue.push(job);
       } else {
-        errorCount++;  // ← NEW: only counts permanent failures, not retries or 429s
+        errorCount++;
         await updateStatus(job.contactId, "FAILED");
       }
     }
@@ -260,6 +260,32 @@ const SEQUENCE_ARC = {
   9:  { purpose: "Soft check-in. Acknowledge the sequence, be self-aware and human. Ask a genuine yes/no question about whether this is still relevant for them right now.", ctaStyle: "question" },
   10: { purpose: "Breakup email. Brief, gracious, no hard sell. Leave the door open. Make it the kind of email they would forward to a colleague.", ctaStyle: "calendar" },
 };
+
+// =============================
+// EM DASH SANITIZATION
+// =============================
+function sanitizeEmDashes(text) {
+  if (!text) return text;
+  return text
+    .replace(/\u2014/g, ', ')
+    .replace(/\u2013/g, ' to ')
+    .replace(/&mdash;/g, ', ')
+    .replace(/&ndash;/g, ' to ')
+    .replace(/&#8212;/g, ', ')
+    .replace(/&#8211;/g, ' to ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
+// =============================
+// SIGNATURE REMOVER — POST-PROCESS SAFETY NET
+// =============================
+function removeSignature(text) {
+  return text
+    .replace(/\n+\s*(Jeff|Scott)\s*$/i, '')
+    .replace(/\n+\s*(Best|Best regards|Thanks|Thank you|Regards|Sincerely|Cheers|Warm regards)[^\n]*/gi, '')
+    .trim();
+}
 
 // =============================
 // CLAUDE LOGIC
@@ -442,25 +468,9 @@ async function runClaude(job, scrapedContent = "") {
   }
 
   subject = sanitizeEmDashes(subject);
-  bodyText = sanitizeEmDashes(bodyText);
+  bodyText = removeSignature(sanitizeEmDashes(bodyText));
 
   return { subject, bodyText };
-}
-
-// =============================
-// EM DASH SANITIZATION
-// =============================
-function sanitizeEmDashes(text) {
-  if (!text) return text;
-  return text
-    .replace(/\u2014/g, ', ')
-    .replace(/\u2013/g, ' to ')
-    .replace(/&mdash;/g, ', ')
-    .replace(/&ndash;/g, ' to ')
-    .replace(/&#8212;/g, ', ')
-    .replace(/&#8211;/g, ' to ')
-    .replace(/ {2,}/g, ' ')
-    .trim();
 }
 
 // =============================
