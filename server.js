@@ -315,6 +315,9 @@ async function runClaude(job, scrapedContent = "") {
     description = ''
   } = job;
 
+  // DEBUG: log what data this contact is coming in with
+  console.log(`🔍 Running Claude for ${job.contactId} | company: "${company}" | website: "${website}" | step: ${SEQUENCE_STEP}`);
+
   const IntentContext =
     hs_intent_signals_enabled === "true"
       ? "Buyer intent signals are active for this account."
@@ -470,6 +473,9 @@ async function runClaude(job, scrapedContent = "") {
     subject = subjectMatch ? subjectMatch[1].trim().replace(/<[^>]+>/g, '') : "";
     bodyText = bodyMatch ? bodyMatch[1].trim() : "";
   }
+
+  // DEBUG: log what came back from Claude
+  console.log(`📧 Claude result for ${job.contactId}: subject="${subject}" | bodyLength=${bodyText.length}`);
 
   if (!subject) {
     throw new Error("Missing subject after retries");
