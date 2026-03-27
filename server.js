@@ -19,6 +19,11 @@ const HUBSPOT_TOKEN = process.env.HUBSPOT_TOKEN;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // =============================
+// SLEEP UTILITY — throttles HubSpot API calls
+// =============================
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// =============================
 // BLOCKED DOMAINS
 // =============================
 const BLOCKED_DOMAINS = new Set([
@@ -160,6 +165,9 @@ async function processJob(job) {
     console.log(`Completed: ${job.contactId} - Step ${job.sequenceStep}`);
   } catch (err) {
     console.error(`Error for ${job.contactId}:`, err.message);
+    if (err.response?.data) {
+      console.error(`  HubSpot says:`, JSON.stringify(err.response.data));
+    }
 
     if (err.response?.status === 429) {
       console.log(`Rate limited, requeuing ${job.contactId}`);
@@ -477,6 +485,8 @@ async function runClaude(job, scrapedContent = "") {
 // HUBSPOT WRITE-BACK
 // =============================
 async function writeResults(contactId, { subject, bodyText }, sequenceStep = 1) {
+  await sleep(300); // throttle HubSpot writes — prevents burst rate limit (100 req/10s)
+
   const bodyHtml = bodyText
     .replace(/\r\n/g, "\n")
     .split(/\n{2,}/)
@@ -520,6 +530,9 @@ async function updateStatus(contactId, status) {
     );
   } catch (err) {
     console.error("Status update failed for " + contactId + ":", err.message);
+    if (err.response?.data) {
+      console.error("  HubSpot says:", JSON.stringify(err.response.data));
+    }
   }
 }
 
