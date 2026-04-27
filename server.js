@@ -159,8 +159,8 @@ async function processJob(job) {
     const scrapedContent = await scrapeWebsite(job.website);
     const result = await runClaude(job, scrapedContent);
 
-    await writeResults(job.contactId, result, job.sequenceStep || 1);
-    await updateStatus(job.contactId, "SENT");
+    // CHANGE: merged writeResults + status "SENT" into a single HubSpot PATCH
+    await writeResultsAndComplete(job.contactId, result, job.sequenceStep || 1);
 
     console.log(`Completed: ${job.contactId} - Step ${job.sequenceStep}`);
   } catch (err) {
@@ -188,7 +188,9 @@ async function processJob(job) {
 }
 
 // =============================
-// WEBSITE SCRAPER
+// WEBSITE SCRAPER — CHANGE: all paths fetched concurrently via Promise.allSettled
+// Previously: sequential for loop, worst-case 9 paths × 4s timeout = 36s per contact
+// Now: all paths fire simultaneously, worst-case = 4s regardless of path count
 // =============================
 async function scrapeWebsite(rawUrl) {
   if (!rawUrl) return "";
@@ -228,29 +230,33 @@ async function scrapeWebsite(rawUrl) {
     "/press-releases",
   ];
 
-  let combined = "";
+  // CHANGE: fire all path requests simultaneously instead of sequentially
+  const fetchResults = await Promise.allSettled(
+    pathsToTry.map(path =>
+      axios.get(url + path, axiosOpts)
+        .then(resp => {
+          const text = (resp.data || "")
+            .toString()
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+            .slice(0, 3000);
+          return text.length > 100 ? `\n\n[${path || "/"}]\n${text}` : "";
+        })
+        .catch(() => "") // silently skip unavailable paths
+    )
+  );
 
-  for (const path of pathsToTry) {
-    try {
-      const resp = await axios.get(url + path, axiosOpts);
-      const text = (resp.data || "")
-        .toString()
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s{2,}/g, " ")
-        .trim()
-        .slice(0, 3000);
-      if (text.length > 100) combined += "\n\n[" + (path || "/") + "]\n" + text;
-    } catch {
-      // silently skip unavailable paths
-    }
-    if (combined.length > 8000) break;
-  }
+  const combined = fetchResults
+    .map(r => r.status === "fulfilled" ? r.value : "")
+    .join("")
+    .trim()
+    .slice(0, 8000);
 
-  const result = combined.trim().slice(0, 8000);
-  if (result) setCachedScrape(domain, result);
-  return result;
+  if (combined) setCachedScrape(domain, combined);
+  return combined;
 }
 
 // =============================
@@ -488,9 +494,13 @@ async function runClaude(job, scrapedContent = "") {
 }
 
 // =============================
-// HUBSPOT WRITE-BACK
+// HUBSPOT WRITE-BACK + STATUS — CHANGE: merged into a single PATCH call
+// Previously: two separate PATCH requests (writeResults + updateStatus "SENT")
+// Now: one PATCH sets all email fields AND ai_email_step_status = "SENT" together
+// Saves one HubSpot API call per contact on the happy path (33% reduction)
+// updateStatus() is still used separately for IN_PROGRESS, RETRY_PENDING, and FAILED
 // =============================
-async function writeResults(contactId, { subject, bodyText }, sequenceStep = 1) {
+async function writeResultsAndComplete(contactId, { subject, bodyText }, sequenceStep = 1) {
   await sleep(300); // throttle HubSpot writes — prevents burst rate limit (100 req/10s)
 
   const bodyHtml = bodyText
@@ -505,7 +515,8 @@ async function writeResults(contactId, { subject, bodyText }, sequenceStep = 1) 
       properties: {
         ["prospect_email_" + sequenceStep + "_subject_line"]: subject,
         ["prospect_email_" + sequenceStep]: bodyHtml,
-        ["claude_ai_generated_email_text_" + sequenceStep]: bodyText
+        ["claude_ai_generated_email_text_" + sequenceStep]: bodyText,
+        ai_email_step_status: "SENT"  // folded in — eliminates the second updateStatus call
       }
     },
     {
@@ -519,7 +530,8 @@ async function writeResults(contactId, { subject, bodyText }, sequenceStep = 1) 
 }
 
 // =============================
-// STATUS UPDATE
+// STATUS UPDATE — still used for IN_PROGRESS, RETRY_PENDING, FAILED
+// The SENT status is now handled inside writeResultsAndComplete above
 // =============================
 async function updateStatus(contactId, status) {
   try {
