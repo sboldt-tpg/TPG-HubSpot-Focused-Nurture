@@ -457,19 +457,76 @@ async function runClaude(job, scrapedContent = "") {
 
   const arc = SEQUENCE_ARC[SEQUENCE_STEP] || SEQUENCE_ARC[1];
 
-  // Steps where AEO is part of the email purpose — the Complete Guide is offered in these only.
+  // Steps where AEO is part of the email purpose.
   const AEO_STEPS = new Set([2, 4, 5, 6, 9]);
 
-  // CHANGE: For AEO steps, inject a second required hyperlink — the Complete Guide to AEO.
-  // This is a value offer (free resource), not a CTA. It must be embedded naturally in a
-  // sentence that makes the guide feel like a logical next step based on the email's content.
-  // The guide link is IN ADDITION to the standard pool URL hyperlink — both must appear.
+  // CHANGE: Two AEO resource offers now alternate across the 5 AEO steps rather than
+  // always using the same URL. Each resource is matched to the step where it lands most
+  // naturally given the arc theme:
+  //
+  //   Content Analyzer (steps 2, 5, 9) — interactive tool, lower commitment ask.
+  //     Step 2 (credibility): "see how your own content scores" pairs well with a client outcome story.
+  //     Step 5 (Jeff's POV): after a sharp insight, the analyzer lets them test the premise themselves.
+  //     Step 9 (soft check-in): a low-friction tool offer fits the gentle, no-pressure tone of the close.
+  //
+  //   Complete Guide (steps 4, 6) — educational deep-dive, fits higher-education moments.
+  //     Step 4 (problem deepener): after naming the pain, the guide gives them somewhere to go for context.
+  //     Step 6 (objection handling): a comprehensive guide helps address "I need to learn more first."
+  //
+  // Both resources are value offers (not CTAs) and must be embedded naturally as a second
+  // hyperlink alongside the standard pool URL hyperlink. Both must appear in every AEO email.
+
+  const AEO_RESOURCE = {
+    // Content Analyzer — interactive scoring tool
+    2: {
+      url: "https://www.pedowitzgroup.com/content-analyzer",
+      label: "content analyzer",
+      instruction: "Position it as an interactive tool the reader can use right now to see how their own content scores for AI search visibility. Frame it as a quick, useful diagnostic — not a sales step.",
+      example: "'To see where your content stands today, TPG built a free <a href=\"https://www.pedowitzgroup.com/content-analyzer\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">content analyzer</a> that scores pages for AI search visibility in under a minute.'"
+    },
+    // Complete Guide — educational resource
+    4: {
+      url: "https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo",
+      label: "complete guide to AEO",
+      instruction: "After naming the pain of invisible pipeline, position the guide as a resource for understanding how AEO works and what structured content looks like. Frame it as context, not a pitch.",
+      example: "'If AEO is new to you, we put together <a href=\"https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">a complete guide to AEO</a> that explains how it works and where to start.'"
+    },
+    // Content Analyzer — interactive scoring tool
+    5: {
+      url: "https://www.pedowitzgroup.com/content-analyzer",
+      label: "content analyzer",
+      instruction: "After sharing Jeff's POV, invite the reader to test the premise themselves with a free tool. Frame it as 'see where you stand' — intellectually curious, not salesy.",
+      example: "'The fastest way to see this gap in your own content is to run it through TPG's free <a href=\"https://www.pedowitzgroup.com/content-analyzer\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">content analyzer</a>, which flags exactly what AI tools can and cannot extract.'"
+    },
+    // Complete Guide — educational resource for the "I need to learn more" objection
+    6: {
+      url: "https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo",
+      label: "complete guide to AEO",
+      instruction: "After handling the 'AEO is too new' objection, offer the guide as something they can read on their own time to form their own view. Frame it as education, not a sales move.",
+      example: "'For anyone still forming a view on this, <a href=\"https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">our complete guide to AEO</a> walks through the evidence and what early movers are doing differently.'"
+    },
+    // Content Analyzer — low-friction tool for the gentle check-in close
+    9: {
+      url: "https://www.pedowitzgroup.com/content-analyzer",
+      label: "content analyzer",
+      instruction: "In the soft check-in, offer the analyzer as a no-commitment way to explore AEO before deciding if it is worth a conversation. Keep it light and low-pressure — it is a tool, not a form.",
+      example: "'If you want a quick read on where your content stands for AI search before we talk, the <a href=\"https://www.pedowitzgroup.com/content-analyzer\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">content analyzer</a> takes about a minute.'"
+    }
+  };
+
   const aeoGuideBlock = AEO_STEPS.has(SEQUENCE_STEP)
-    ? "- AEO COMPLETE GUIDE (REQUIRED in this email — AEO step): In addition to the standard pool URL hyperlink, you MUST also include a second hyperlink to the TPG Complete Guide to AEO. This is a value offer, not a CTA. Embed it naturally in a sentence where the guide is positioned as a useful resource the reader can explore on their own time — not a sales page. The link text should be a short descriptive phrase (3-5 words), not a single word, so the reader knows what they are getting.\n" +
-      "  Guide URL: https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\n" +
-      "  Hyperlink format: <a href=\"https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">phrase</a>\n" +
-      "  Good example: 'If AEO is new to you, we put together <a href=\"https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">a complete guide to AEO</a> that explains how it works and where to start.'\n" +
-      "  Bad example: 'Click here to read our guide.' — generic, feels like an ad, INVALID.\n"
+    ? (() => {
+        const r = AEO_RESOURCE[SEQUENCE_STEP];
+        return (
+          "- AEO RESOURCE OFFER (REQUIRED in this email — AEO step): In addition to the standard pool URL hyperlink, you MUST embed a second hyperlink to the AEO resource assigned to this step. This is a value offer, not a CTA. The link text should be a short descriptive phrase (3-5 words) so the reader knows what they are clicking.\n" +
+          "  Resource URL: " + r.url + "\n" +
+          "  Link phrase to use: \"" + r.label + "\" (or a close natural variant)\n" +
+          "  How to position it: " + r.instruction + "\n" +
+          "  Hyperlink format: <a href=\"" + r.url + "\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">phrase</a>\n" +
+          "  Good example: " + r.example + "\n" +
+          "  Bad example: 'Click here to learn more.' — generic, feels like an ad, INVALID.\n"
+        );
+      })()
     : "";
 
   const ctaInstruction = arc.ctaStyle === "question"
