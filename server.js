@@ -159,7 +159,7 @@ async function processJob(job) {
     const scrapedContent = await scrapeWebsite(job.website);
     const result = await runClaude(job, scrapedContent);
 
-    // CHANGE: merged writeResults + status "SENT" into a single HubSpot PATCH
+    // merged writeResults + status "SENT" into a single HubSpot PATCH
     await writeResultsAndComplete(job.contactId, result, job.sequenceStep || 1);
 
     console.log(`Completed: ${job.contactId} - Step ${job.sequenceStep}`);
@@ -188,8 +188,8 @@ async function processJob(job) {
 }
 
 // =============================
-// WEBSITE SCRAPER — CHANGE: all paths fetched concurrently via Promise.allSettled
-// Previously: sequential for loop, worst-case 9 paths × 4s timeout = 36s per contact
+// WEBSITE SCRAPER — all paths fetched concurrently via Promise.allSettled
+// Previously: sequential for loop, worst-case 9 paths x 4s timeout = 36s per contact
 // Now: all paths fire simultaneously, worst-case = 4s regardless of path count
 // =============================
 async function scrapeWebsite(rawUrl) {
@@ -230,7 +230,6 @@ async function scrapeWebsite(rawUrl) {
     "/press-releases",
   ];
 
-  // CHANGE: fire all path requests simultaneously instead of sequentially
   const fetchResults = await Promise.allSettled(
     pathsToTry.map(path =>
       axios.get(url + path, axiosOpts)
@@ -245,7 +244,7 @@ async function scrapeWebsite(rawUrl) {
             .slice(0, 3000);
           return text.length > 100 ? `\n\n[${path || "/"}]\n${text}` : "";
         })
-        .catch(() => "") // silently skip unavailable paths
+        .catch(() => "")
     )
   );
 
@@ -261,18 +260,113 @@ async function scrapeWebsite(rawUrl) {
 
 // =============================
 // SEQUENCE ARC
+//
+// AEO (Answer Engine Optimization) is woven into steps 2, 4, 5, 6, and 9.
+// Rationale for each placement:
+//
+//   Step 2 — Credibility: a TPG outcome that spans both HubSpot pipeline impact AND
+//     AEO-driven visibility, showing TPG delivers on both fronts from day one.
+//
+//   Step 4 — Problem deepener: the hidden cost angle is that buyers researching
+//     solutions in ChatGPT, Perplexity, and Google AI Overviews never make it into
+//     the HubSpot CRM at all — because the company isn't present in AI-generated
+//     answers. This reframes pipeline gaps as a content-structure problem, not just
+//     a HubSpot problem.
+//
+//   Step 5 — Jeff's POV: his sharpest take on the intersection of AEO and HubSpot.
+//     HubSpot is where you close revenue; AEO is how modern buyers find you before
+//     they ever reach your CRM. The two are not competing strategies — one feeds the
+//     other.
+//
+//   Step 6 — Objection handling: directly addresses the "AEO sounds too new / not
+//     proven" pushback. Reframe: first-movers are already appearing in AI-generated
+//     answers and building pipeline from it. Waiting is not neutral — it is ceding
+//     ground to competitors who are moving now.
+//
+//   Step 9 — Soft check-in: the gentle close. Acknowledge the sequence covered both
+//     HubSpot and AEO, then ask a single yes/no question about whether either is on
+//     the radar next quarter. Low friction, high signal.
 // =============================
 const SEQUENCE_ARC = {
-  1:  { purpose: "Pattern interrupt. Open with a hyper-specific observation from their website or industry that reframes a problem they likely already feel. Goal: earn a second read.", ctaStyle: "calendar" },
-  2:  { purpose: "Credibility builder. Lead with a brief, concrete TPG client outcome relevant to their industry or role. No fluff. Let the result do the persuading.", ctaStyle: "calendar" },
-  3:  { purpose: "Social proof. Reference how peers in their industry are using HubSpot and TPG to solve a specific operational problem. Make them feel the movement.", ctaStyle: "resource" },
-  4:  { purpose: "Problem deepener. Name a hidden cost or downstream consequence of the problem from a new angle. Do not pitch yet. Just make the pain more real.", ctaStyle: "question" },
-  5:  { purpose: "Insight and POV. Share a sharp, non-obvious opinion Jeff holds about revenue marketing in their space. Position Jeff as a practitioner, not a vendor.", ctaStyle: "calendar" },
-  6:  { purpose: "Objection handling. Address a likely reason they have not replied (too busy, already have a solution, unclear ROI). Be direct and empathetic, not defensive.", ctaStyle: "resource" },
-  7:  { purpose: "Urgency without pressure. Reference a real market shift, hiring signal, or technology trend that makes inaction more costly. Ground it in their specific context.", ctaStyle: "calendar" },
-  8:  { purpose: "Case study hook. Open with a one-sentence client story (no name needed) that mirrors their situation. Let the parallel do the work.", ctaStyle: "calendar" },
-  9:  { purpose: "Soft check-in. Acknowledge the sequence, be self-aware and human. Ask a genuine yes/no question about whether this is still relevant for them right now.", ctaStyle: "question" },
-  10: { purpose: "Breakup email. Brief, gracious, no hard sell. Leave the door open. Make it the kind of email they would forward to a colleague.", ctaStyle: "calendar" },
+  1: {
+    purpose: "Pattern interrupt. Open with a hyper-specific observation from their website or industry that reframes a problem they likely already feel. Goal: earn a second read.",
+    ctaStyle: "calendar"
+  },
+
+  2: {
+    // CHANGE: AEO added to credibility step.
+    // The TPG client outcome should span both dimensions — HubSpot operational improvement
+    // AND a measurable gain in content visibility or inbound pipeline that AEO drove.
+    // This establishes early that TPG is not just a HubSpot shop but a full revenue
+    // marketing and AI search firm. Keep AEO brief here — one sentence woven naturally
+    // into the outcome story, not a separate pitch.
+    purpose: "Credibility builder. Lead with a brief, concrete TPG client outcome relevant to their industry or role. No fluff — let the result do the persuading. Weave in one natural mention of AEO (Answer Engine Optimization): specifically that part of the result included the client's content becoming visible in AI-generated search responses (ChatGPT, Perplexity, or Google AI Overviews), which fed new pipeline that had not existed before. Keep the AEO reference to one sentence — it should feel like a detail that deepens the outcome, not a separate service pitch.",
+    ctaStyle: "calendar"
+  },
+
+  3: {
+    purpose: "Social proof. Reference how peers in their industry are using HubSpot and TPG to solve a specific operational problem. Make them feel the movement.",
+    ctaStyle: "resource"
+  },
+
+  4: {
+    // CHANGE: AEO added as the hidden cost / problem deepener.
+    // The angle: the most expensive pipeline gap is the one that never shows up in
+    // the CRM at all. B2B buyers increasingly start their vendor research in AI tools,
+    // and companies whose content is not structured for AI extraction are invisible
+    // at the top of that funnel. These prospects never enter HubSpot — so the CRM
+    // data makes the problem invisible. Name this clearly. Do not pitch a solution yet.
+    purpose: "Problem deepener. Name a hidden cost or downstream consequence of the problem from a new angle. Do not pitch yet — just make the pain more real. The angle for this email: the most expensive pipeline leak is the one that never shows up in the CRM at all. B2B buyers increasingly use ChatGPT, Perplexity, and Google AI Overviews to research vendors before ever visiting a website. Companies whose content is not structured for AI extraction are invisible at that stage, so those prospects never enter HubSpot, never trigger a workflow, and never appear in pipeline reports. The data looks fine. The problem is invisible. Name this cost clearly and specifically in the context of their industry or role. Do not offer a solution in this email.",
+    ctaStyle: "question"
+  },
+
+  5: {
+    // CHANGE: AEO is the centerpiece of Jeff's POV in this step.
+    // His sharpest, most non-obvious opinion: HubSpot is where you close revenue,
+    // but AEO is how buyers find you before they ever reach your CRM. The two are
+    // not competing priorities — AEO feeds HubSpot. Most revenue marketers optimize
+    // the middle and bottom of the funnel while the top-of-funnel is being restructured
+    // by AI search tools they have never optimized for. This is where the leverage is.
+    purpose: "Insight and POV. Share a sharp, non-obvious opinion Jeff holds about revenue marketing in their space. Position Jeff as a practitioner, not a vendor. The POV for this email centers on AEO (Answer Engine Optimization) and HubSpot as connected systems: HubSpot is where you close revenue, but AEO is how modern buyers find you before they ever reach your CRM. Most revenue marketers spend all their optimization energy from the lead stage forward, while the stage before that — AI-assisted vendor research in ChatGPT, Perplexity, and Google SGE — is reshaping who even enters the funnel. Companies appearing in AI-generated answers are building brand credibility and pipeline from a channel most of their competitors have not touched. This is not a content trend. It is a structural shift in how B2B buyers screen vendors, and HubSpot data will never show you what it is costing you.",
+    ctaStyle: "calendar"
+  },
+
+  6: {
+    // CHANGE: AEO objection handling added alongside the standard non-reply objections.
+    // The secondary objection to address: "AEO sounds experimental / too early to invest in."
+    // Reframe: companies appearing in AI-generated answers right now are not running
+    // experiments — they are building pipeline. The window for first-mover advantage
+    // is open today and will narrow as more competitors move. This is not a prediction;
+    // it is observable in the results TPG clients are already seeing.
+    purpose: "Objection handling. Address a likely reason they have not replied (too busy, already have a solution, unclear ROI). Be direct and empathetic, not defensive. Also address a secondary objection specifically about AEO: the belief that it is too new, too experimental, or not worth investing in yet. Reframe this directly: companies that structured their content for AI extraction six months ago are appearing in ChatGPT and Perplexity answers today and generating pipeline from it. Waiting is not a neutral position — it is letting competitors establish presence in a channel that B2B buyers are already using to screen vendors. TPG clients are seeing this in their results now, not in a future state. Keep both objection responses tight and confident, not defensive.",
+    ctaStyle: "resource"
+  },
+
+  7: {
+    purpose: "Urgency without pressure. Reference a real market shift, hiring signal, or technology trend that makes inaction more costly. Ground it in their specific context.",
+    ctaStyle: "calendar"
+  },
+
+  8: {
+    purpose: "Case study hook. Open with a one-sentence client story (no name needed) that mirrors their situation. Let the parallel do the work.",
+    ctaStyle: "calendar"
+  },
+
+  9: {
+    // CHANGE: AEO added to the soft check-in.
+    // After acknowledging the sequence, briefly note that the emails covered two
+    // connected topics — HubSpot optimization and AEO for AI search visibility —
+    // and ask a single yes/no question about whether either is on the radar next
+    // quarter. This surfaces AEO one final time without pressure and creates a
+    // natural opening for a conversation that could start with either topic.
+    purpose: "Soft check-in. Acknowledge the sequence, be self-aware and human. In one sentence, note that across this sequence you covered two connected topics: HubSpot optimization and AEO (getting visible in AI-generated search results). Then ask a single, genuine yes/no question: is either of those on their radar for the next quarter? Keep it short, warm, and low-pressure. No hard sell. The goal is to surface whether there is an opening — on either topic — before the final email.",
+    ctaStyle: "question"
+  },
+
+  10: {
+    purpose: "Breakup email. Brief, gracious, no hard sell. Leave the door open. Make it the kind of email they would forward to a colleague.",
+    ctaStyle: "calendar"
+  },
 };
 
 // =============================
@@ -302,6 +396,26 @@ function removeSignature(text) {
 }
 
 // =============================
+// TPG RESOURCE URL POOL
+//
+// CHANGE: Expanded from 5 original URLs to 10, sourced from a live crawl of
+// https://www.pedowitzgroup.com on 2026-04-30. Each entry includes a context
+// hint so Claude can choose the URL that best fits each email's topic rather
+// than picking blindly from a flat list.
+//
+// URL reference:
+//   hubspot-main         General HubSpot overview; all three service tiers
+//   hubspot-move-it      Platform migration from Marketo/Eloqua/Pardot; 1,000+ migrations
+//   hubspot-tune-it      HubSpot optimization/audit; fixing broken or underused setups
+//   hubspot-run-it       Managed HubSpot services; TPG runs it for you
+//   /solutions/martech/hubSpot  Enterprise HubSpot: CRM implementation, RevOps, large teams
+//   /aeo                 AEO services: AI search visibility, ChatGPT/Perplexity/SGE content
+//
+// The URL pool is defined inline in the Claude prompt below so the model can
+// read the context hints and select the most relevant URL per email.
+// =============================
+
+// =============================
 // CLAUDE LOGIC
 // =============================
 async function runClaude(job, scrapedContent = "") {
@@ -321,8 +435,7 @@ async function runClaude(job, scrapedContent = "") {
     description = ''
   } = job;
 
-  // DEBUG: log what data this contact is coming in with
-  console.log(`🔍 Running Claude for ${job.contactId} | company: "${company}" | website: "${website}" | step: ${SEQUENCE_STEP}`);
+  console.log(`Running Claude for ${job.contactId} | company: "${company}" | website: "${website}" | step: ${SEQUENCE_STEP}`);
 
   const IntentContext =
     hs_intent_signals_enabled === "true"
@@ -344,10 +457,25 @@ async function runClaude(job, scrapedContent = "") {
 
   const arc = SEQUENCE_ARC[SEQUENCE_STEP] || SEQUENCE_ARC[1];
 
+  // Steps where AEO is part of the email purpose — the Complete Guide is offered in these only.
+  const AEO_STEPS = new Set([2, 4, 5, 6, 9]);
+
+  // CHANGE: For AEO steps, inject a second required hyperlink — the Complete Guide to AEO.
+  // This is a value offer (free resource), not a CTA. It must be embedded naturally in a
+  // sentence that makes the guide feel like a logical next step based on the email's content.
+  // The guide link is IN ADDITION to the standard pool URL hyperlink — both must appear.
+  const aeoGuideBlock = AEO_STEPS.has(SEQUENCE_STEP)
+    ? "- AEO COMPLETE GUIDE (REQUIRED in this email — AEO step): In addition to the standard pool URL hyperlink, you MUST also include a second hyperlink to the TPG Complete Guide to AEO. This is a value offer, not a CTA. Embed it naturally in a sentence where the guide is positioned as a useful resource the reader can explore on their own time — not a sales page. The link text should be a short descriptive phrase (3-5 words), not a single word, so the reader knows what they are getting.\n" +
+      "  Guide URL: https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\n" +
+      "  Hyperlink format: <a href=\"https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">phrase</a>\n" +
+      "  Good example: 'If AEO is new to you, we put together <a href=\"https://www.pedowitzgroup.com/the-complete-guide-to-answer-engine-optimization-aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">a complete guide to AEO</a> that explains how it works and where to start.'\n" +
+      "  Bad example: 'Click here to read our guide.' — generic, feels like an ad, INVALID.\n"
+    : "";
+
   const ctaInstruction = arc.ctaStyle === "question"
     ? "End with a single direct yes/no question instead of a calendar link. No scheduling link in this email."
     : arc.ctaStyle === "resource"
-    ? "Include ONE paragraph with exactly ONE single-word hyperlink to a resource URL (choose randomly from the list below). Do NOT include a calendar link in this email."
+    ? "Include ONE paragraph with exactly ONE single-word hyperlink to a resource URL chosen from the URL pool below (pick the URL whose context best fits this email's topic). Do NOT include a calendar link in this email."
     : "Include ONE separate paragraph with a calendar CTA using: <a href=\"https://meetings.hubspot.com/jeff-pedowitz\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">word</a>";
 
   const userContent =
@@ -416,21 +544,33 @@ async function runClaude(job, scrapedContent = "") {
     "- Do NOT assume HubSpot usage.\n" +
     "- Reference HubSpot as a platform companies in their industry are using.\n" +
     "- Position The Pedowitz Group as HubSpot Elite Partners and revenue marketing experts.\n" +
+    "- Where the email purpose calls for AEO, position TPG as a certified AEO provider that helps companies structure content to appear in ChatGPT, Perplexity, and Google AI Overview responses — and explain why this feeds HubSpot pipeline rather than competing with it.\n" +
     "- Choose ONE problem domain not used in any prior email:\n" +
     "  (forecasting accuracy, RevOps governance, attribution trust, data hygiene, lifecycle stage alignment, scale readiness, pipeline velocity, sales-marketing handoff, lead quality, customer retention marketing)\n\n" +
 
+    "TPG RESOURCE URL POOL — choose ONE URL for the required hyperlink in this email.\n" +
+    "Pick the URL whose context description best fits this email's topic. Do not pick randomly — match the URL to the email's angle.\n\n" +
+    "  URL 1: https://www.pedowitzgroup.com/hubspot-main\n" +
+    "  Context: General HubSpot overview covering all three service tiers (Move It, Tune It, Run It). Good default when the email discusses HubSpot broadly or does not fit a more specific page.\n\n" +
+    "  URL 2: https://www.pedowitzgroup.com/hubspot-move-it\n" +
+    "  Context: Platform migration page. 1,000+ migrations, zero failures, 73% average cost reduction. Use when the email angle involves escaping Marketo, Eloqua, Pardot, or high platform costs.\n\n" +
+    "  URL 3: https://www.pedowitzgroup.com/hubspot-tune-it\n" +
+    "  Context: HubSpot optimization and audit page. Fixing broken workflows, underutilized platform, lead scoring, attribution gaps. Use when the pain is about HubSpot not performing or being used at low capacity.\n\n" +
+    "  URL 4: https://www.pedowitzgroup.com/hubspot-run-it\n" +
+    "  Context: HubSpot managed services page. TPG runs HubSpot for you — campaigns, workflows, reporting, database hygiene, 24/7 admin. Use when the pain is team capacity, lack of in-house expertise, or the desire to delegate execution.\n\n" +
+    "  URL 5: https://www.pedowitzgroup.com/solutions/martech/hubSpot\n" +
+    "  Context: Enterprise HubSpot services page. CRM implementation, RevOps alignment, multi-team governance, large-team complexity. Use for enterprise-sized companies or when discussing CRM governance and organizational scale.\n\n" +
+    "  URL 6: https://www.pedowitzgroup.com/aeo\n" +
+    "  Context: TPG's AEO (Answer Engine Optimization) services page. Helps companies structure content to appear in ChatGPT, Perplexity, and Google AI Overview responses. Use for any email where AEO is mentioned — this is the natural destination URL for that topic.\n\n" +
+
     "LINKS AND CTA:\n" +
-    "- EVERY email MUST include exactly ONE hyperlinked word linking to a TPG resource URL. This is required in every email regardless of CTA style.\n" +
+    "- EVERY email MUST include exactly ONE hyperlinked word linking to a URL from the pool above.\n" +
     "- The hyperlink must be embedded naturally in a sentence that flows with the surrounding content. It should read like a reference or supporting detail, not a call-to-action. The reader should barely notice it is a link until they see the styling.\n" +
-    "- Choose ONE URL randomly from this list:\n" +
-    "  * https://www.pedowitzgroup.com/hubspot-main\n" +
-    "  * https://www.pedowitzgroup.com/hubspot-move-it\n" +
-    "  * https://www.pedowitzgroup.com/hubspot-tune-it\n" +
-    "  * https://www.pedowitzgroup.com/hubspot-run-it\n" +
-    "  * https://www.pedowitzgroup.com/solutions/martech/hubSpot\n" +
     "- Hyperlink format (single word only): <a href=\"URL\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">word</a>\n" +
     "- Good example: 'The companies getting the most from HubSpot treat it as a revenue <a href=\"https://www.pedowitzgroup.com/hubspot-main\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">infrastructure</a> problem, not a marketing one.'\n" +
+    "- Good AEO example: 'Most of that research now happens in AI tools before the buyer ever reaches a website, which is exactly why <a href=\"https://www.pedowitzgroup.com/aeo\" style=\"font-weight:bold;text-decoration:underline;color:#A2CF23;\">AEO</a> has become the missing top-of-funnel layer for revenue marketers.'\n" +
     "- Bad example: 'Click <a href=\"...\">here</a> to learn more.' — generic, feels like an ad, INVALID.\n" +
+    aeoGuideBlock +
     "- CTA instruction for this email: " + ctaInstruction + "\n\n" +
 
     "COMPLIANCE:\n" +
@@ -480,8 +620,7 @@ async function runClaude(job, scrapedContent = "") {
     bodyText = bodyMatch ? bodyMatch[1].trim() : "";
   }
 
-  // DEBUG: log what came back from Claude
-  console.log(`📧 Claude result for ${job.contactId}: subject="${subject}" | bodyLength=${bodyText.length}`);
+  console.log(`Claude result for ${job.contactId}: subject="${subject}" | bodyLength=${bodyText.length}`);
 
   if (!subject) {
     throw new Error("Missing subject after retries");
@@ -494,11 +633,9 @@ async function runClaude(job, scrapedContent = "") {
 }
 
 // =============================
-// HUBSPOT WRITE-BACK + STATUS — CHANGE: merged into a single PATCH call
-// Previously: two separate PATCH requests (writeResults + updateStatus "SENT")
-// Now: one PATCH sets all email fields AND ai_email_step_status = "SENT" together
-// Saves one HubSpot API call per contact on the happy path (33% reduction)
-// updateStatus() is still used separately for IN_PROGRESS, RETRY_PENDING, and FAILED
+// HUBSPOT WRITE-BACK + STATUS — single PATCH call
+// Sets all email fields AND ai_email_step_status = "SENT" together.
+// updateStatus() is still used separately for IN_PROGRESS, RETRY_PENDING, FAILED.
 // =============================
 async function writeResultsAndComplete(contactId, { subject, bodyText }, sequenceStep = 1) {
   await sleep(300); // throttle HubSpot writes — prevents burst rate limit (100 req/10s)
@@ -516,7 +653,7 @@ async function writeResultsAndComplete(contactId, { subject, bodyText }, sequenc
         ["prospect_email_" + sequenceStep + "_subject_line"]: subject,
         ["prospect_email_" + sequenceStep]: bodyHtml,
         ["claude_ai_generated_email_text_" + sequenceStep]: bodyText,
-        ai_email_step_status: "SENT"  // folded in — eliminates the second updateStatus call
+        ai_email_step_status: "SENT"
       }
     },
     {
@@ -530,8 +667,8 @@ async function writeResultsAndComplete(contactId, { subject, bodyText }, sequenc
 }
 
 // =============================
-// STATUS UPDATE — still used for IN_PROGRESS, RETRY_PENDING, FAILED
-// The SENT status is now handled inside writeResultsAndComplete above
+// STATUS UPDATE — used for IN_PROGRESS, RETRY_PENDING, FAILED
+// SENT status is handled inside writeResultsAndComplete above.
 // =============================
 async function updateStatus(contactId, status) {
   try {
